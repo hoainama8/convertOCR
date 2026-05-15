@@ -1,0 +1,2 @@
+# thư mục chứa file build sau khi chạy lệnh npm run build
+dist/
