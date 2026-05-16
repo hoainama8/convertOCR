@@ -27,7 +27,11 @@ Dự án hiện hỗ trợ xuất PDF sang các định dạng sau:
 ```bash
 go run ./cmd/server
 ```
-
+hoặc 
+```bash
+go run ./cmd/server --addr <port>
+```
+nếu bạn muốn chạy port khác :8080
 2. Mở trình duyệt và truy cập địa chỉ mà server in ra (thường là `http://localhost:<port>`).
 
 3. Tải lên file PDF, chọn định dạng đầu ra, nhấn chuyển đổi để tải file kết quả.
