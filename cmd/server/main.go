@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"opendataloader-go/internal/parser"
@@ -29,6 +30,7 @@ type converterApp struct {
 	addr           string
 	parserFactory  DocumentParserFactory
 	formatResolver FormatResolver
+	convertSlots   chan struct{}
 }
 
 type convertedFile struct {
@@ -58,9 +60,10 @@ type DefaultFormatResolver struct{}
 
 func main() {
 	addr := flag.String("addr", ":8080", "HTTP listen address")
+	maxConcurrent := flag.Int("max-concurrent", runtime.NumCPU(), "Maximum number of concurrent conversion jobs")
 	flag.Parse()
 
-	app := newConverterApp(*addr)
+	app := newConverterApp(*addr, *maxConcurrent)
 	http.HandleFunc("/", app.indexHandler)
 	http.HandleFunc("/convert", app.convertHandler)
 
@@ -70,11 +73,16 @@ func main() {
 	}
 }
 
-func newConverterApp(addr string) *converterApp {
+func newConverterApp(addr string, maxConcurrent int) *converterApp {
+	if maxConcurrent < 1 {
+		maxConcurrent = 1
+	}
+
 	return &converterApp{
 		addr:           addr,
 		parserFactory:  &PDFDocumentParserFactory{},
 		formatResolver: &DefaultFormatResolver{},
+		convertSlots:   make(chan struct{}, maxConcurrent),
 	}
 }
 
@@ -95,6 +103,13 @@ func (a *converterApp) convertHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	// Allow multiple conversion jobs in parallel up to configured capacity.
+	if !a.tryAcquireConvertSlot() {
+		http.Error(w, "Converter is busy. Please try again in a moment.", http.StatusLocked)
+		return
+	}
+	defer a.releaseConvertSlot()
 
 	if err := r.ParseMultipartForm(200 << 20); err != nil {
 		http.Error(w, "Failed to parse upload", http.StatusBadRequest)
@@ -163,6 +178,19 @@ func (a *converterApp) convertHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment; filename=converted-files.zip")
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(zipBytes)))
 	_, _ = w.Write(zipBytes)
+}
+
+func (a *converterApp) tryAcquireConvertSlot() bool {
+	select {
+	case a.convertSlots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *converterApp) releaseConvertSlot() {
+	<-a.convertSlots
 }
 
 func saveUploadedFile(fileHeader *multipart.FileHeader) (string, error) {
